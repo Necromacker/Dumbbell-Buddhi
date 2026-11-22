@@ -1,10 +1,10 @@
 .app-container {
-  max-width: 800px;
-  margin: 40px auto;
-  padding: 0 20px;
+  max-width: 720px;
+  margin: 30px auto;
+  padding: 0 16px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
 }
 
 /* Control Buttons Row */
@@ -72,7 +72,7 @@
   font-size: 0.9rem;
 }
 
-/* Webcam Box */
+/* Webcam Box - Pure Clean View */
 .webcam-box {
   width: 100%;
   aspect-ratio: 4 / 3;
@@ -97,13 +97,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   color: #64748b;
 }
 
 .camera-circle {
-  width: 72px;
-  height: 72px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
   background: #1e293b;
   display: flex;
@@ -116,54 +116,79 @@
 }
 
 .webcam-offline p {
-  font-size: 1rem;
+  font-size: 0.95rem;
 }
 
-/* Stats Row: Good Reps & Latest Form Verdict */
-.stats-row {
+/* Metrics Row below webcam: Good, Bad, and FPS */
+.metrics-row {
   display: grid;
-  grid-template-columns: 200px 1fr;
-  gap: 16px;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
 }
 
-@media (max-width: 600px) {
-  .stats-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-.stat-card {
+.metric-card {
   background: #131b2a;
   border: 1px solid #1e293b;
-  border-radius: 14px;
-  padding: 18px 24px;
+  border-radius: 12px;
+  padding: 14px 18px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  gap: 4px;
 }
 
-.stat-title {
-  font-size: 0.8rem;
+.metric-title {
+  font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #64748b;
 }
 
-.good-reps-card .stat-count {
+.metric-value {
   font-family: var(--font-mono);
-  font-size: 3rem;
+  font-size: 2.4rem;
   font-weight: 800;
-  color: #10b981;
-  line-height: 1;
+  line-height: 1.1;
 }
 
-.verdict-text {
+.good-card .metric-value {
+  color: #10b981;
+}
+
+.bad-card .metric-value {
+  color: #ef4444;
+}
+
+.fps-card .metric-value {
+  color: #06b6d4;
+}
+
+/* Verdict Container - Below all three */
+.verdict-container {
+  background: #131b2a;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.verdict-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+}
+
+.verdict-box {
   font-size: 1.25rem;
   font-weight: 700;
+  min-height: 32px;
   display: flex;
   align-items: center;
-  height: 100%;
 }
 
 .verdict-ok {

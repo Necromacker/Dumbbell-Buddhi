@@ -183,15 +183,8 @@ class PushupTracker:
         self.fps = 0.9 * self.fps + 0.1 / max(now_t - self.prev_t, 1e-6)
         self.prev_t = now_t
 
-        if draw_overlay:
-            cv2.putText(frame, f"FPS {self.fps:.0f}  |  {status}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-            if elbow is not None:
-                cv2.putText(frame, f"elbow {elbow:.0f}  hip {hip_ang:.0f}  knee {knee_ang:.0f}  flat {flat_deg:.0f}  [{self.state}]",
-                            (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
-            cv2.putText(frame, f"GOOD {self.good}   BAD {self.bad}", (10, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-            if self.verdict:
-                cv2.putText(frame, self.verdict, (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                            (0, 200, 0) if self.verdict_ok else (0, 0, 255), 2)
+        # No text overlays on the video frame
+        # (GOOD, BAD, FPS, and verdict are rendered in React below the webcam)
 
         stats: dict[str, Any] = {
             "state": self.state,

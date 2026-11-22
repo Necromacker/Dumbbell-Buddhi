@@ -1,3 +1,4 @@
+import json
 import logging
 import threading
 import time
@@ -166,6 +167,18 @@ def api_reset():
 @app.route("/api/status", methods=["GET"])
 def api_status():
     return jsonify(stream_mgr.get_stats())
+
+
+@app.route("/api/stream_stats")
+def stream_stats():
+    def event_stream():
+        while stream_mgr.is_running:
+            with stream_mgr.lock:
+                stats = dict(stream_mgr.latest_stats)
+            yield f"data: {json.dumps(stats)}\n\n"
+            time.sleep(0.1)
+
+    return Response(event_stream(), mimetype="text/event-stream")
 
 
 @app.route("/video_feed")

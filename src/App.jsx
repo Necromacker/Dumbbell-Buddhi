@@ -9,38 +9,49 @@ export default function App() {
   
   const [stats, setStats] = useState({
     good: 0,
+    bad: 0,
+    fps: 0,
     verdict: '',
     verdict_ok: true,
-    is_running: false,
   });
 
-  const pollIntervalRef = useRef(null);
+  const eventSourceRef = useRef(null);
 
-  const fetchStatus = async () => {
-    try {
-      const res = await fetch('/api/status');
-      if (res.ok) {
-        const data = await res.json();
-        setStats(data);
-        if (typeof data.is_running === 'boolean') {
-          setIsRunning(data.is_running);
-        }
-      }
-    } catch (err) {
-      // Backend not yet reachable
-    }
-  };
-
+  // Single SSE stream to receive live stats (zero polling fetch calls)
   useEffect(() => {
-    fetchStatus();
-    pollIntervalRef.current = setInterval(fetchStatus, 200);
+    if (isRunning) {
+      const es = new EventSource('/api/stream_stats');
+      eventSourceRef.current = es;
 
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          setStats({
+            good: data.good || 0,
+            bad: data.bad || 0,
+            fps: Math.round(data.fps || 0),
+            verdict: data.verdict || '',
+            verdict_ok: data.verdict_ok !== false,
+          });
+        } catch (e) {
+          // ignore parse error
+        }
+      };
+
+      es.onerror = () => {
+        es.close();
+      };
+
+      return () => {
+        es.close();
+      };
+    } else {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
       }
-    };
-  }, []);
+    }
+  }, [isRunning]);
 
   const handleStart = async () => {
     setLoading(true);
@@ -65,9 +76,9 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/stop', { method: 'POST' });
-      const data = await res.json();
+      await fetch('/api/stop', { method: 'POST' });
       setIsRunning(false);
+      setStats((prev) => ({ ...prev, fps: 0 }));
     } catch (err) {
       setError('Error while stopping model: ' + err.message);
     } finally {
@@ -78,11 +89,13 @@ export default function App() {
   const handleReset = async () => {
     try {
       await fetch('/api/reset', { method: 'POST' });
-      setStats((prev) => ({
-        ...prev,
+      setStats({
         good: 0,
+        bad: 0,
+        fps: 0,
         verdict: '',
-      }));
+        verdict_ok: true,
+      });
     } catch (err) {
       console.error(err);
     }
@@ -129,7 +142,7 @@ export default function App() {
 
       {error && <div className="error-banner">{error}</div>}
 
-      {/* Webcam View */}
+      {/* Webcam View - Nothing displayed on top of the webcam */}
       <div className="webcam-box">
         {isRunning ? (
           <img
@@ -150,25 +163,37 @@ export default function App() {
         )}
       </div>
 
-      {/* Stats Row: Good Reps & Latest Form Verdict */}
-      <div className="stats-row">
+      {/* Metrics Row below webcam: Good Reps, Bad Reps, and FPS */}
+      <div className="metrics-row">
         {/* Good Reps */}
-        <div className="stat-card good-reps-card">
-          <span className="stat-title">Good Reps</span>
-          <span className="stat-count">{stats.good}</span>
+        <div className="metric-card good-card">
+          <span className="metric-title">Good Reps</span>
+          <span className="metric-value">{stats.good}</span>
         </div>
 
-        {/* Latest Form Verdict */}
-        <div className="stat-card verdict-card">
-          <span className="stat-title">Latest Form Verdict</span>
-          {stats.verdict ? (
-            <div className={`verdict-text ${stats.verdict_ok ? 'verdict-ok' : 'verdict-bad'}`}>
-              {stats.verdict}
-            </div>
-          ) : (
-            <div className="verdict-text verdict-empty">No reps yet</div>
-          )}
+        {/* Bad Reps */}
+        <div className="metric-card bad-card">
+          <span className="metric-title">Bad Reps</span>
+          <span className="metric-value">{stats.bad}</span>
         </div>
+
+        {/* FPS */}
+        <div className="metric-card fps-card">
+          <span className="metric-title">FPS</span>
+          <span className="metric-value">{isRunning ? stats.fps : '--'}</span>
+        </div>
+      </div>
+
+      {/* Verdict displayed below all three (Good, Bad, FPS) */}
+      <div className="verdict-container">
+        <span className="verdict-label">Latest Form Verdict</span>
+        {stats.verdict ? (
+          <div className={`verdict-box ${stats.verdict_ok ? 'verdict-ok' : 'verdict-bad'}`}>
+            {stats.verdict}
+          </div>
+        ) : (
+          <div className="verdict-box verdict-empty">No reps yet</div>
+        )}
       </div>
     </div>
   );
