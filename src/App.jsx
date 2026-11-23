@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Peer from 'peerjs';
 import { io } from 'socket.io-client';
+import { BrowserPushupTracker } from './poseTracker.js';
 import Homepage from './Homepage.jsx';
 import './App.css';
 
@@ -33,6 +34,47 @@ export default function App() {
   const currentRoomRef = useRef(null);
   const myClientIdRef = useRef('player_' + Math.random().toString(36).substring(2, 9));
   const isHostRef = useRef(false);
+  const trackerRef = useRef(null);
+  const animFrameRef = useRef(null);
+
+  // Initialize In-Browser MediaPipe Pushup Tracker
+  useEffect(() => {
+    if (currentView === 'play') {
+      const tracker = new BrowserPushupTracker((newReps) => {
+        setUserReps(newReps);
+      });
+      tracker.initialize();
+      trackerRef.current = tracker;
+    }
+    return () => {
+      trackerRef.current = null;
+    };
+  }, [currentView]);
+
+  // Real-Time Pushup Pose Detection Loop during live battle
+  useEffect(() => {
+    if (matchState === 'in_progress' && trackerRef.current) {
+      trackerRef.current.reset();
+
+      let isLoopRunning = true;
+      const detectLoop = (now) => {
+        if (!isLoopRunning) return;
+        if (localVideoRef.current && trackerRef.current) {
+          trackerRef.current.processVideoFrame(localVideoRef.current, now);
+        }
+        animFrameRef.current = requestAnimationFrame(detectLoop);
+      };
+
+      animFrameRef.current = requestAnimationFrame(detectLoop);
+
+      return () => {
+        isLoopRunning = false;
+        if (animFrameRef.current) {
+          cancelAnimationFrame(animFrameRef.current);
+        }
+      };
+    }
+  }, [matchState]);
 
   // Initialize Local Camera stream when entering 'play' view
   useEffect(() => {

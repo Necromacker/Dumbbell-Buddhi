@@ -5,11 +5,19 @@ import threading
 import time
 import uuid
 from typing import Any, Optional
-import cv2
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from Model import PushupTracker, CAM_INDEX, FRAME_W, FRAME_H, TARGET_FPS
+
+try:
+    import cv2
+    from Model import PushupTracker, CAM_INDEX, FRAME_W, FRAME_H, TARGET_FPS
+    HAS_LOCAL_MODEL = True
+except ImportError:
+    HAS_LOCAL_MODEL = False
+    CAM_INDEX = 0
+    FRAME_W, FRAME_H, TARGET_FPS = 1080, 720, 60
+    PushupTracker = None
 
 # Suppress repetitive HTTP polling logs from Werkzeug
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
@@ -101,11 +109,11 @@ class VideoStreamManager:
         self.lock = threading.Lock()
         self.is_running: bool = False
         self.thread: Optional[threading.Thread] = None
-        self.cap: Optional[cv2.VideoCapture] = None
+        self.cap: Optional[Any] = None
         self.latest_jpeg: Optional[bytes] = None
         
-        # Initialize tracker instance
-        self.tracker: PushupTracker = PushupTracker()
+        # Initialize tracker instance if running locally with Python OpenCV/MediaPipe
+        self.tracker: Optional[Any] = PushupTracker() if (HAS_LOCAL_MODEL and PushupTracker is not None) else None
 
         self.latest_stats: dict[str, Any] = {
             "state": "UP",
@@ -126,6 +134,9 @@ class VideoStreamManager:
         }
 
     def start(self):
+        if not HAS_LOCAL_MODEL or cv2 is None:
+            return True, "Cloud server active: Video pose detection runs client-side in browser MediaPipe."
+
         with self.lock:
             if self.is_running:
                 return True, "Model is already running."
