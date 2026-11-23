@@ -1,18 +1,100 @@
 import json
 import logging
+import os
 import threading
 import time
+import uuid
 from typing import Any, Optional
 import cv2
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from Model import PushupTracker, CAM_INDEX, FRAME_W, FRAME_H, TARGET_FPS
 
 # Suppress repetitive HTTP polling logs from Werkzeug
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
+# Real Matchmaking Queue & Active 1v1 Rooms
+waiting_queue: list[str] = []
+active_rooms: dict[str, dict[str, Any]] = {}
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "waiting_players": len(waiting_queue), "active_rooms": len(active_rooms)})
+
+@socketio.on("connect")
+def on_connect():
+    pass
+
+@socketio.on("disconnect")
+def on_disconnect():
+    sid = request.sid
+    if sid in waiting_queue:
+        waiting_queue.remove(sid)
+
+    # Clean up any active battle rooms
+    for room_id, room_data in list(active_rooms.items()):
+        if sid in room_data.get("players", []):
+            emit("opponent_left", {"message": "Opponent disconnected"}, to=room_id)
+            del active_rooms[room_id]
+            break
+
+@socketio.on("find_match")
+def on_find_match(data=None):
+    sid = request.sid
+    if sid in waiting_queue:
+        return
+
+    if waiting_queue:
+        # Match with the waiting real player
+        opponent_sid = waiting_queue.pop(0)
+        room_id = f"battle_{uuid.uuid4().hex[:8]}"
+
+        join_room(room_id, sid=sid)
+        join_room(room_id, sid=opponent_sid)
+
+        active_rooms[room_id] = {
+            "players": [opponent_sid, sid]
+        }
+
+        # Tell both real players match is found
+        emit("match_found", {
+            "room_id": room_id,
+            "is_initiator": True,
+            "opponent_id": sid
+        }, to=opponent_sid)
+
+        emit("match_found", {
+            "room_id": room_id,
+            "is_initiator": False,
+            "opponent_id": opponent_sid
+        }, to=sid)
+    else:
+        waiting_queue.append(sid)
+        emit("queued", {"status": "waiting"})
+
+@socketio.on("cancel_match")
+def on_cancel_match():
+    sid = request.sid
+    if sid in waiting_queue:
+        waiting_queue.remove(sid)
+    emit("cancelled", {"status": "idle"})
+
+@socketio.on("webrtc_signal")
+def on_webrtc_signal(data):
+    room_id = data.get("room_id")
+    if room_id:
+        emit("webrtc_signal", data, to=room_id, include_self=False)
+
+@socketio.on("rep_update")
+def on_rep_update(data):
+    room_id = data.get("room_id")
+    if room_id:
+        emit("rep_update", data, to=room_id, include_self=False)
 
 class VideoStreamManager:
     def __init__(self):
@@ -190,5 +272,6 @@ def video_feed():
 
 
 if __name__ == "__main__":
-    print("Starting Dumbbell Buddhi Flask Server on http://localhost:5001")
-    app.run(host="0.0.0.0", port=5001, debug=False, threaded=True)
+    port = int(os.environ.get("PORT", 5001))
+    print(f"Starting Dumbbell Buddhi Server on port {port}")
+    socketio.run(app, host="0.0.0.0", port=port, debug=False)
