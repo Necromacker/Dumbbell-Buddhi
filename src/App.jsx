@@ -1,12 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
+import Homepage from './Homepage.jsx';
 import './App.css';
 
 export default function App() {
+  const [currentView, setCurrentView] = useState('home'); // 'home' | 'play'
   const [isRunning, setIsRunning] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [feedTimestamp, setFeedTimestamp] = useState(Date.now());
-  
+
+  // Match state machine: 'idle' | 'get_ready' | 'in_progress' | 'finished'
+  const [matchState, setMatchState] = useState('idle');
+  const [prepTimer, setPrepTimer] = useState(10);
+  const [battleTimer, setBattleTimer] = useState(30);
+
   const [stats, setStats] = useState({
     good: 0,
     bad: 0,
@@ -16,10 +23,11 @@ export default function App() {
   });
 
   const eventSourceRef = useRef(null);
+  const timerIntervalRef = useRef(null);
 
-  // Single SSE stream to receive live stats (zero polling fetch calls)
+  // SSE Stream to receive real-time pushup stats from Model.py
   useEffect(() => {
-    if (isRunning) {
+    if (isRunning && currentView === 'play') {
       const es = new EventSource('/api/stream_stats');
       eventSourceRef.current = es;
 
@@ -34,7 +42,7 @@ export default function App() {
             verdict_ok: data.verdict_ok !== false,
           });
         } catch (e) {
-          // ignore parse error
+          // ignore
         }
       };
 
@@ -51,150 +59,220 @@ export default function App() {
         eventSourceRef.current = null;
       }
     }
-  }, [isRunning]);
+  }, [isRunning, currentView]);
 
-  const handleStart = async () => {
+  // Clean up any running countdown timers on unmount
+  useEffect(() => {
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    };
+  }, []);
+
+  // Handle Find Match -> 10s Prep -> 30s Match
+  const handleFindMatch = async () => {
     setLoading(true);
     setError(null);
+
+    // 1. Start the camera and reset AI counts
     try {
       const res = await fetch('/api/start', { method: 'POST' });
       const data = await res.json();
-      if (data.success) {
-        setIsRunning(true);
-        setFeedTimestamp(Date.now());
-      } else {
+      if (!data.success) {
         setError(data.message || 'Failed to start webcam');
+        setLoading(false);
+        return;
       }
+      setIsRunning(true);
+      setFeedTimestamp(Date.now());
+      await fetch('/api/reset', { method: 'POST' });
     } catch (err) {
       setError('Cannot connect to backend server. Make sure server.py is running on port 5001.');
-    } finally {
       setLoading(false);
+      return;
     }
+
+    setLoading(false);
+    setStats({ good: 0, bad: 0, fps: 0, verdict: '', verdict_ok: true });
+
+    // 2. Start 10-second preparation countdown
+    setMatchState('get_ready');
+    setPrepTimer(10);
+
+    let currentPrep = 10;
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+
+    timerIntervalRef.current = setInterval(async () => {
+      currentPrep -= 1;
+      setPrepTimer(currentPrep);
+
+      if (currentPrep <= 0) {
+        clearInterval(timerIntervalRef.current);
+
+        // 3. Reset reps right when the 30-second match starts
+        try {
+          await fetch('/api/reset', { method: 'POST' });
+          setStats({ good: 0, bad: 0, fps: 0, verdict: '', verdict_ok: true });
+        } catch (e) {}
+
+        // 4. Start 30-second live match timer
+        setMatchState('in_progress');
+        setBattleTimer(30);
+
+        let currentBattle = 30;
+        timerIntervalRef.current = setInterval(() => {
+          currentBattle -= 1;
+          setBattleTimer(currentBattle);
+
+          if (currentBattle <= 0) {
+            clearInterval(timerIntervalRef.current);
+            setMatchState('finished');
+          }
+        }, 1000);
+      }
+    }, 1000);
   };
 
-  const handleStop = async () => {
-    setLoading(true);
-    setError(null);
+  const handleStopMatch = async () => {
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     try {
       await fetch('/api/stop', { method: 'POST' });
-      setIsRunning(false);
-      setStats((prev) => ({ ...prev, fps: 0 }));
-    } catch (err) {
-      setError('Error while stopping model: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) {}
+    setIsRunning(false);
+    setMatchState('idle');
   };
 
-  const handleReset = async () => {
-    try {
-      await fetch('/api/reset', { method: 'POST' });
-      setStats({
-        good: 0,
-        bad: 0,
-        fps: 0,
-        verdict: '',
-        verdict_ok: true,
-      });
-    } catch (err) {
-      console.error(err);
-    }
+  const handleBackToHome = () => {
+    handleStopMatch();
+    setCurrentView('home');
   };
 
+  // If on homepage, render the Homepage
+  if (currentView === 'home') {
+    return <Homepage onNavigate={setCurrentView} />;
+  }
+
+  // Arena & Webcam Page
   return (
-    <div className="app-container">
-      {/* Control Buttons: Start, Stop, Reset */}
-      <div className="controls-row">
-        <button
-          className="btn btn-start"
-          onClick={handleStart}
-          disabled={loading || isRunning}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+    <div className="arena-page">
+      {/* Top Header matching Homepage UI */}
+      <header className="arena-header">
+        <button className="arena-logo-btn" onClick={handleBackToHome} title="Back to Home">
+          <svg className="arena-logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 5v14M18 5v14M2 9v6M22 9v6M6 12h12" />
           </svg>
-          Start
         </button>
 
-        <button
-          className="btn btn-stop"
-          onClick={handleStop}
-          disabled={loading || !isRunning}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="5" y="5" width="14" height="14" rx="2"></rect>
-          </svg>
-          Stop
+        <h2 className="arena-title">LIVE 1V1 PUSHUP ARENA</h2>
+
+        <button className="arena-back-btn" onClick={handleBackToHome}>
+          Back to Home
         </button>
+      </header>
 
-        <button
-          className="btn btn-reset"
-          onClick={handleReset}
-          disabled={loading}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-            <path d="M3 3v5h5" />
-          </svg>
-          Reset
-        </button>
-      </div>
+      {error && <div className="arena-error-banner">{error}</div>}
 
-      {error && <div className="error-banner">{error}</div>}
-
-      {/* Webcam View - Nothing displayed on top of the webcam */}
-      <div className="webcam-box">
-        {isRunning ? (
-          <img
-            className="webcam-feed"
-            src={`/video_feed?t=${feedTimestamp}`}
-            alt="Webcam Feed"
-          />
-        ) : (
-          <div className="webcam-offline">
-            <div className="camera-circle">
-              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
-                <circle cx="12" cy="13" r="4"></circle>
-              </svg>
+      {/* Main 90% Screen Webcam Viewport */}
+      <main className="arena-webcam-container">
+        <div className="arena-webcam-box">
+          {isRunning ? (
+            <img
+              className="arena-webcam-feed"
+              src={`/video_feed?t=${feedTimestamp}`}
+              alt="Webcam Feed"
+            />
+          ) : (
+            <div className="arena-webcam-standby">
+              <div className="standby-icon-circle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                  <circle cx="12" cy="13" r="4"></circle>
+                </svg>
+              </div>
             </div>
-            <p>Webcam is off. Click <strong>Start</strong> to begin.</p>
+          )}
+
+          {/* OVERLAY 1: "Find Match" in the middle when idle */}
+          {matchState === 'idle' && (
+            <div className="overlay-center">
+              <button
+                className="btn-find-match"
+                onClick={handleFindMatch}
+                disabled={loading}
+              >
+                <span>{loading ? 'STARTING...' : 'FIND MATCH'}</span>
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+              </button>
+            </div>
+          )}
+
+          {/* OVERLAY 2: 10-Second Prep Counter ("Get in Position") */}
+          {matchState === 'get_ready' && (
+            <div className="overlay-center prep-overlay">
+              <span className="prep-label">GET INTO PUSHUP POSITION</span>
+              <div className="prep-number">{prepTimer}</div>
+              <span className="prep-subtext">Match begins when timer hits 0</span>
+            </div>
+          )}
+
+          {/* OVERLAY 3: 30-Second Live Match Header */}
+          {matchState === 'in_progress' && (
+            <div className="live-battle-hud">
+              <div className="live-pulse-badge">
+                <span className="live-dot"></span> LIVE MATCH
+              </div>
+              <div className="live-timer-badge">
+                TIME LEFT: <strong>{battleTimer}s</strong>
+              </div>
+            </div>
+          )}
+
+          {/* OVERLAY 4: Match Finished */}
+          {matchState === 'finished' && (
+            <div className="overlay-center finished-overlay">
+              <span className="finished-title">TIME'S UP! MATCH COMPLETED</span>
+              <div className="finished-score">
+                <span>FINAL GOOD REPS</span>
+                <strong>{stats.good}</strong>
+              </div>
+              <div className="finished-buttons">
+                <button className="btn-find-match" onClick={handleFindMatch}>
+                  PLAY AGAIN
+                </button>
+                <button className="btn-secondary" onClick={handleBackToHome}>
+                  HOME
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Displayed ONLY just below the webcam box: Good Reps and Verdict */}
+        <div className="arena-stats-row">
+          {/* 1. Good Reps Card */}
+          <div className="stat-card good-reps-card">
+            <span className="stat-title">GOOD REPS</span>
+            <span className="stat-value">{stats.good}</span>
           </div>
-        )}
-      </div>
 
-      {/* Metrics Row below webcam: Good Reps, Bad Reps, and FPS */}
-      <div className="metrics-row">
-        {/* Good Reps */}
-        <div className="metric-card good-card">
-          <span className="metric-title">Good Reps</span>
-          <span className="metric-value">{stats.good}</span>
-        </div>
-
-        {/* Bad Reps */}
-        <div className="metric-card bad-card">
-          <span className="metric-title">Bad Reps</span>
-          <span className="metric-value">{stats.bad}</span>
-        </div>
-
-        {/* FPS */}
-        <div className="metric-card fps-card">
-          <span className="metric-title">FPS</span>
-          <span className="metric-value">{isRunning ? stats.fps : '--'}</span>
-        </div>
-      </div>
-
-      {/* Verdict displayed below all three (Good, Bad, FPS) */}
-      <div className="verdict-container">
-        <span className="verdict-label">Latest Form Verdict</span>
-        {stats.verdict ? (
-          <div className={`verdict-box ${stats.verdict_ok ? 'verdict-ok' : 'verdict-bad'}`}>
-            {stats.verdict}
+          {/* 2. Verdict Card Beside It */}
+          <div className="stat-card verdict-card">
+            <span className="stat-title">FORM VERDICT</span>
+            {stats.verdict ? (
+              <div className={`verdict-badge ${stats.verdict_ok ? 'verdict-ok' : 'verdict-bad'}`}>
+                {stats.verdict}
+              </div>
+            ) : (
+              <div className="verdict-badge verdict-empty">
+                {matchState === 'in_progress' ? 'Start doing pushups...' : 'Awaiting match start'}
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="verdict-box verdict-empty">No reps yet</div>
-        )}
-      </div>
+        </div>
+      </main>
     </div>
   );
 }
