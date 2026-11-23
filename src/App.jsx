@@ -6,7 +6,6 @@ export default function App() {
   const [currentView, setCurrentView] = useState('home'); // 'home' | 'play'
   const [isRunning, setIsRunning] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
   const [feedTimestamp, setFeedTimestamp] = useState(Date.now());
 
   // Match state machine: 'idle' | 'get_ready' | 'in_progress' | 'finished'
@@ -14,18 +13,15 @@ export default function App() {
   const [prepTimer, setPrepTimer] = useState(10);
   const [battleTimer, setBattleTimer] = useState(30);
 
-  const [stats, setStats] = useState({
-    good: 0,
-    bad: 0,
-    fps: 0,
-    verdict: '',
-    verdict_ok: true,
-  });
+  // User and Opponent scores (strictly numbers)
+  const [userReps, setUserReps] = useState(0);
+  const [opponentReps, setOpponentReps] = useState(0);
 
   const eventSourceRef = useRef(null);
   const timerIntervalRef = useRef(null);
+  const opponentIntervalRef = useRef(null);
 
-  // SSE Stream to receive real-time pushup stats from Model.py
+  // SSE Stream to receive real-time pushup stats from Model.py if backend is running
   useEffect(() => {
     if (isRunning && currentView === 'play') {
       const es = new EventSource('/api/stream_stats');
@@ -34,13 +30,9 @@ export default function App() {
       es.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          setStats({
-            good: data.good || 0,
-            bad: data.bad || 0,
-            fps: Math.round(data.fps || 0),
-            verdict: data.verdict || '',
-            verdict_ok: data.verdict_ok !== false,
-          });
+          if (typeof data.good === 'number') {
+            setUserReps(data.good);
+          }
         } catch (e) {
           // ignore
         }
@@ -64,44 +56,38 @@ export default function App() {
   // Clean up any running countdown timers on unmount
   useEffect(() => {
     return () => {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      if (opponentIntervalRef.current) clearInterval(opponentIntervalRef.current);
     };
   }, []);
 
-  // Handle Find Match -> 10s Prep -> 30s Match
-  const handleFindMatch = async () => {
+  // Handle Play -> Only 10s Timer -> 30s Match
+  const handleStartMatch = async () => {
     setLoading(true);
-    setError(null);
 
-    // 1. Start the camera and reset AI counts
     try {
       const res = await fetch('/api/start', { method: 'POST' });
       const data = await res.json();
-      if (!data.success) {
-        setError(data.message || 'Failed to start webcam');
-        setLoading(false);
-        return;
+      if (data && data.success) {
+        setIsRunning(true);
+        setFeedTimestamp(Date.now());
+        await fetch('/api/reset', { method: 'POST' });
       }
-      setIsRunning(true);
-      setFeedTimestamp(Date.now());
-      await fetch('/api/reset', { method: 'POST' });
     } catch (err) {
-      setError('Cannot connect to backend server. Make sure server.py is running on port 5001.');
-      setLoading(false);
-      return;
+      // Backend not running - silently continue
     }
 
     setLoading(false);
-    setStats({ good: 0, bad: 0, fps: 0, verdict: '', verdict_ok: true });
+    setUserReps(0);
+    setOpponentReps(0);
 
-    // 2. Start 10-second preparation countdown
+    // 1. 10-second preparation countdown (ONLY the number)
     setMatchState('get_ready');
     setPrepTimer(10);
 
     let currentPrep = 10;
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    if (opponentIntervalRef.current) clearInterval(opponentIntervalRef.current);
 
     timerIntervalRef.current = setInterval(async () => {
       currentPrep -= 1;
@@ -110,15 +96,21 @@ export default function App() {
       if (currentPrep <= 0) {
         clearInterval(timerIntervalRef.current);
 
-        // 3. Reset reps right when the 30-second match starts
+        // Reset reps when live battle begins
         try {
           await fetch('/api/reset', { method: 'POST' });
-          setStats({ good: 0, bad: 0, fps: 0, verdict: '', verdict_ok: true });
         } catch (e) {}
+        setUserReps(0);
+        setOpponentReps(0);
 
-        // 4. Start 30-second live match timer
+        // 2. 30-second live battle timer
         setMatchState('in_progress');
         setBattleTimer(30);
+
+        // Opponent live pace simulator
+        opponentIntervalRef.current = setInterval(() => {
+          setOpponentReps((prev) => prev + 1);
+        }, 2600);
 
         let currentBattle = 30;
         timerIntervalRef.current = setInterval(() => {
@@ -127,6 +119,7 @@ export default function App() {
 
           if (currentBattle <= 0) {
             clearInterval(timerIntervalRef.current);
+            if (opponentIntervalRef.current) clearInterval(opponentIntervalRef.current);
             setMatchState('finished');
           }
         }, 1000);
@@ -136,6 +129,7 @@ export default function App() {
 
   const handleStopMatch = async () => {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    if (opponentIntervalRef.current) clearInterval(opponentIntervalRef.current);
     try {
       await fetch('/api/stop', { method: 'POST' });
     } catch (e) {}
@@ -148,131 +142,111 @@ export default function App() {
     setCurrentView('home');
   };
 
-  // If on homepage, render the Homepage
+  // If on homepage, render Homepage
   if (currentView === 'home') {
     return <Homepage onNavigate={setCurrentView} />;
   }
 
-  // Arena & Webcam Page
+  // Calculate live tug-of-war battle line percentage
+  const totalReps = userReps + opponentReps;
+  const userPercent = totalReps === 0 ? 50 : Math.max(10, Math.min(90, (userReps / totalReps) * 100));
+  const oppPercent = 100 - userPercent;
+
   return (
-    <div className="arena-page">
-      {/* Top Header matching Homepage UI */}
-      <header className="arena-header">
-        <button className="arena-logo-btn" onClick={handleBackToHome} title="Back to Home">
-          <svg className="arena-logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M6 5v14M18 5v14M2 9v6M22 9v6M6 12h12" />
-          </svg>
-        </button>
-
-        <h2 className="arena-title">LIVE 1V1 PUSHUP ARENA</h2>
-
-        <button className="arena-back-btn" onClick={handleBackToHome}>
-          Back to Home
-        </button>
-      </header>
-
-      {error && <div className="arena-error-banner">{error}</div>}
-
-      {/* Main 90% Screen Webcam Viewport */}
-      <main className="arena-webcam-container">
-        <div className="arena-webcam-box">
-          {isRunning ? (
-            <img
-              className="arena-webcam-feed"
-              src={`/video_feed?t=${feedTimestamp}`}
-              alt="Webcam Feed"
-            />
-          ) : (
-            <div className="arena-webcam-standby">
-              <div className="standby-icon-circle">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
-                  <circle cx="12" cy="13" r="4"></circle>
-                </svg>
-              </div>
+    <div className="fullscreen-arena">
+      {/* 100% Height & Width Fullscreen Webcam Viewport */}
+      <div className="arena-fullscreen-viewport">
+        {isRunning ? (
+          <img
+            className="fullscreen-feed"
+            src={`/video_feed?t=${feedTimestamp}`}
+            alt="Webcam Feed"
+          />
+        ) : (
+          <div className="fullscreen-standby">
+            <div className="standby-icon-circle">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                <circle cx="12" cy="13" r="4"></circle>
+              </svg>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* OVERLAY 1: "Find Match" in the middle when idle */}
-          {matchState === 'idle' && (
-            <div className="overlay-center">
-              <button
-                className="btn-find-match"
-                onClick={handleFindMatch}
-                disabled={loading}
-              >
-                <span>{loading ? 'STARTING...' : 'FIND MATCH'}</span>
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                </svg>
-              </button>
+        {/* TOP BAR: [ X ] on Left <---> [ Counter in Middle ] <---> [ 30s Timer on Right ] */}
+        <header className="arena-top-header">
+          {/* Left: Clean X button */}
+          <button className="top-x-btn" onClick={handleBackToHome} title="Exit">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+
+          {/* Middle: Live counter with numbers at both ends and line in middle */}
+          <div className="top-battle-line-group">
+            {/* Left: Green User Number only */}
+            <span className="live-counter-num green-num">{userReps}</span>
+
+            {/* Middle: Live changing split line */}
+            <div className="live-battle-bar">
+              <div
+                className="live-segment user-segment"
+                style={{ width: `${userPercent}%` }}
+              />
+              <div
+                className="live-segment opp-segment"
+                style={{ width: `${oppPercent}%` }}
+              />
             </div>
-          )}
 
-          {/* OVERLAY 2: 10-Second Prep Counter ("Get in Position") */}
-          {matchState === 'get_ready' && (
-            <div className="overlay-center prep-overlay">
-              <span className="prep-label">GET INTO PUSHUP POSITION</span>
-              <div className="prep-number">{prepTimer}</div>
-              <span className="prep-subtext">Match begins when timer hits 0</span>
-            </div>
-          )}
-
-          {/* OVERLAY 3: 30-Second Live Match Header */}
-          {matchState === 'in_progress' && (
-            <div className="live-battle-hud">
-              <div className="live-pulse-badge">
-                <span className="live-dot"></span> LIVE MATCH
-              </div>
-              <div className="live-timer-badge">
-                TIME LEFT: <strong>{battleTimer}s</strong>
-              </div>
-            </div>
-          )}
-
-          {/* OVERLAY 4: Match Finished */}
-          {matchState === 'finished' && (
-            <div className="overlay-center finished-overlay">
-              <span className="finished-title">TIME'S UP! MATCH COMPLETED</span>
-              <div className="finished-score">
-                <span>FINAL GOOD REPS</span>
-                <strong>{stats.good}</strong>
-              </div>
-              <div className="finished-buttons">
-                <button className="btn-find-match" onClick={handleFindMatch}>
-                  PLAY AGAIN
-                </button>
-                <button className="btn-secondary" onClick={handleBackToHome}>
-                  HOME
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Displayed ONLY just below the webcam box: Good Reps and Verdict */}
-        <div className="arena-stats-row">
-          {/* 1. Good Reps Card */}
-          <div className="stat-card good-reps-card">
-            <span className="stat-title">GOOD REPS</span>
-            <span className="stat-value">{stats.good}</span>
+            {/* Right: Red Opponent Number only */}
+            <span className="live-counter-num red-num">{opponentReps}</span>
           </div>
 
-          {/* 2. Verdict Card Beside It */}
-          <div className="stat-card verdict-card">
-            <span className="stat-title">FORM VERDICT</span>
-            {stats.verdict ? (
-              <div className={`verdict-badge ${stats.verdict_ok ? 'verdict-ok' : 'verdict-bad'}`}>
-                {stats.verdict}
-              </div>
-            ) : (
-              <div className="verdict-badge verdict-empty">
-                {matchState === 'in_progress' ? 'Start doing pushups...' : 'Awaiting match start'}
-              </div>
-            )}
+          {/* Right: 30s Timer badge just like the X button */}
+          <div className="top-timer-btn" title="Timer">
+            <span>{battleTimer}</span>
           </div>
-        </div>
-      </main>
+        </header>
+
+        {/* CENTER OVERLAY: Play Button in the middle when idle */}
+        {matchState === 'idle' && (
+          <div className="overlay-center">
+            <button
+              className="btn-circle-play"
+              onClick={handleStartMatch}
+              disabled={loading}
+              title="Play"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="8 5 19 12 8 19 8 5"></polygon>
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {/* 10-Second Prep Counter: ONLY THE NUMBER */}
+        {matchState === 'get_ready' && (
+          <div className="overlay-center">
+            <div className="raw-timer-number">{prepTimer}</div>
+          </div>
+        )}
+
+        {/* Match Finished / Result: RETURN button without any SVG */}
+        {matchState === 'finished' && (
+          <div className="overlay-center finished-overlay">
+            <div className="finished-scores">
+              <span className="green-num">{userReps}</span>
+              <span className="score-sep">-</span>
+              <span className="red-num">{opponentReps}</span>
+            </div>
+            <button className="btn-return" onClick={handleBackToHome} title="Return">
+              RETURN
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
