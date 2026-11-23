@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sys
 import threading
 import time
 import uuid
@@ -19,12 +20,13 @@ except ImportError:
     FRAME_W, FRAME_H, TARGET_FPS = 1080, 720, 60
     PushupTracker = None
 
-# Suppress repetitive HTTP polling logs from Werkzeug
-logging.getLogger('werkzeug').setLevel(logging.ERROR)
+# Force all prints to flush immediately (required for Render logs)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", logger=True, engineio_logger=False)
 
 # Real Matchmaking Queue & Active 1v1 Rooms
 waiting_queue: list[str] = []
@@ -36,25 +38,36 @@ def health():
 
 @socketio.on("connect")
 def on_connect():
-    pass
+    sid = request.sid
+    logger.info(f"CONNECT: {sid} | Total connected")
+    sys.stdout.flush()
 
 @socketio.on("disconnect")
 def on_disconnect():
     sid = request.sid
+    logger.info(f"DISCONNECT: {sid}")
     if sid in waiting_queue:
         waiting_queue.remove(sid)
+        logger.info(f"  Removed {sid} from queue. Queue now: {len(waiting_queue)}")
 
     # Clean up any active battle rooms
     for room_id, room_data in list(active_rooms.items()):
         if sid in room_data.get("players", []):
             emit("opponent_left", {"message": "Opponent disconnected"}, to=room_id)
             del active_rooms[room_id]
+            logger.info(f"  Room {room_id} destroyed (opponent left)")
             break
+    sys.stdout.flush()
 
 @socketio.on("find_match")
 def on_find_match(data=None):
     sid = request.sid
+    logger.info(f"FIND_MATCH from {sid} | Queue size: {len(waiting_queue)} | Queue: {waiting_queue}")
+    sys.stdout.flush()
+
     if sid in waiting_queue:
+        logger.info(f"  {sid} already in queue, skipping")
+        sys.stdout.flush()
         return
 
     if waiting_queue:
@@ -68,6 +81,9 @@ def on_find_match(data=None):
         active_rooms[room_id] = {
             "players": [opponent_sid, sid]
         }
+
+        logger.info(f"  MATCH FOUND! Room: {room_id} | Player1: {opponent_sid} vs Player2: {sid}")
+        sys.stdout.flush()
 
         # Tell both real players match is found
         emit("match_found", {
@@ -83,6 +99,8 @@ def on_find_match(data=None):
         }, to=sid)
     else:
         waiting_queue.append(sid)
+        logger.info(f"  {sid} added to queue. Queue now: {len(waiting_queue)}")
+        sys.stdout.flush()
         emit("queued", {"status": "waiting"})
 
 @socketio.on("cancel_match")
@@ -90,6 +108,8 @@ def on_cancel_match():
     sid = request.sid
     if sid in waiting_queue:
         waiting_queue.remove(sid)
+    logger.info(f"CANCEL_MATCH: {sid} | Queue now: {len(waiting_queue)}")
+    sys.stdout.flush()
     emit("cancelled", {"status": "idle"})
 
 @socketio.on("webrtc_signal")

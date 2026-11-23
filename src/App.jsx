@@ -118,7 +118,13 @@ export default function App() {
     }
   }, [remoteStream, matchState]);
 
-  // Socket.IO (for internet matchmaking on Render / Netlify) + BroadcastChannel (for local tabs)
+  // Refs for state access inside callbacks (avoids stale closures)
+  const matchStateRef = useRef(matchState);
+  useEffect(() => { matchStateRef.current = matchState; }, [matchState]);
+  const localStreamRef = useRef(localStream);
+  useEffect(() => { localStreamRef.current = localStream; }, [localStream]);
+
+  // Socket.IO + PeerJS — connect ONCE when entering play view, never tear down on state changes
   useEffect(() => {
     if (currentView !== 'play') return;
 
@@ -130,13 +136,27 @@ export default function App() {
     });
     socketRef.current = socket;
 
+    socket.on('connect', () => {
+      console.log('[Socket.IO] Connected:', socket.id);
+    });
+
+    socket.on('connect_error', (err) => {
+      console.warn('[Socket.IO] Connection error:', err.message);
+    });
+
+    socket.on('queued', () => {
+      console.log('[Socket.IO] Queued — waiting for opponent...');
+    });
+
     socket.on('match_found', (data) => {
+      console.log('[Socket.IO] MATCH FOUND:', data);
       currentRoomRef.current = data.room_id;
       if (data.is_initiator) {
         isHostRef.current = true;
-        if (peerRef.current && localStream) {
+        const stream = localStreamRef.current;
+        if (peerRef.current && stream) {
           try {
-            const call = peerRef.current.call(data.opponent_id, localStream);
+            const call = peerRef.current.call(data.opponent_id, stream);
             if (call) {
               call.on('stream', (incomingStream) => {
                 setRemoteStream(incomingStream);
@@ -161,7 +181,7 @@ export default function App() {
       setRemoteStream(null);
     });
 
-    // 2. BroadcastChannel for instant local 1v1 tab matchmaking
+    // 2. BroadcastChannel for local same-browser tabs
     const channel = new BroadcastChannel('dumbbell_matchmaking_1v1');
     broadcastChannelRef.current = channel;
 
@@ -169,8 +189,8 @@ export default function App() {
       const data = event.data;
       if (!data || data.senderId === myClientIdRef.current) return;
 
-      if (data.type === 'SEARCHING' && matchState === 'searching') {
-        // Tie-breaker: decide who initiates the WebRTC call
+      const currentState = matchStateRef.current;
+      if (data.type === 'SEARCHING' && currentState === 'searching') {
         if (myClientIdRef.current > data.senderId) {
           isHostRef.current = true;
           channel.postMessage({
@@ -180,10 +200,10 @@ export default function App() {
             hostId: myClientIdRef.current
           });
 
-          // Call opponent's peer directly
-          if (peerRef.current && localStream) {
+          const stream = localStreamRef.current;
+          if (peerRef.current && stream) {
             try {
-              const call = peerRef.current.call(data.senderId, localStream);
+              const call = peerRef.current.call(data.senderId, stream);
               if (call) {
                 call.on('stream', (incomingStream) => {
                   setRemoteStream(incomingStream);
@@ -194,10 +214,10 @@ export default function App() {
 
           beginMatchedCountdown();
         }
-      } else if (data.type === 'MATCH_ACCEPT' && data.targetId === myClientIdRef.current && matchState === 'searching') {
+      } else if (data.type === 'MATCH_ACCEPT' && data.targetId === myClientIdRef.current && currentState === 'searching') {
         isHostRef.current = false;
         beginMatchedCountdown();
-      } else if (data.type === 'REP_UPDATE' && (matchState === 'in_progress' || matchState === 'get_ready')) {
+      } else if (data.type === 'REP_UPDATE' && (currentState === 'in_progress' || currentState === 'get_ready')) {
         setOpponentReps(data.reps);
       } else if (data.type === 'MATCH_FINISH') {
         setMatchState('finished');
@@ -210,8 +230,9 @@ export default function App() {
       peerRef.current = peer;
 
       peer.on('call', (call) => {
-        if (localStream) {
-          call.answer(localStream);
+        const stream = localStreamRef.current;
+        if (stream) {
+          call.answer(stream);
         } else {
           call.answer();
         }
@@ -237,7 +258,7 @@ export default function App() {
         peerRef.current.destroy();
       }
     };
-  }, [currentView, matchState, localStream]);
+  }, [currentView]); // ← ONLY depends on currentView, NOT matchState or localStream
 
   // Clean up timers on unmount
   useEffect(() => {
