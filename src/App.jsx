@@ -123,7 +123,7 @@ export default function App() {
     if (currentView !== 'play') return;
 
     // 1. Socket.IO connection to backend (Render or localhost)
-    const backendUrl = import.meta.env.VITE_BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:5001' : window.location.origin);
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:5001' : 'https://dumbbell-buddhi.onrender.com');
     const socket = io(backendUrl, {
       autoConnect: true,
       transports: ['websocket', 'polling']
